@@ -2,3 +2,6 @@ streamlit
 openai>=1.0.0
 pytesseract
 Pillow
+requests
+opencv-python-headless
+urllib3
