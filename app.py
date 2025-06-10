@@ -36,7 +36,10 @@ if uploaded_images and openai_key:
 
     # ===== GPT 호출 =====
     openai.api_key = openai_key
-    gpt_prompt = f"""아래 성분들을 포함한 약을 동시에 복용할 경우의 주의사항이나 상호작용 가능성이 있다면 알려줘. 
+    gpt_prompt = f"""아래 성분들을 포함한 약을 동시에 복용할 경우의 주의사항이나 상호작용 가능성이 있다면 알려줘.
+
+{combined_text}
+"""
 
     try:
         response = openai.chat.completions.create(
@@ -83,7 +86,6 @@ if uploaded_images and openai_key:
                     st.markdown(get_drug_info(line, drug_api_key))
     else:
         st.warning("📌 공공데이터 API 키가 입력되지 않았습니다.")
+
 else:
     st.info("👈 API 키를 입력하고 이미지를 업로드하면 결과가 표시됩니다.")
-    
-
