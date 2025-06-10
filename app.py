@@ -1,60 +1,89 @@
 import streamlit as st
 from PIL import Image
 import pytesseract
-from openai import OpenAI
+import requests
+import openai
+import urllib.parse
+import urllib3
 
-# Tesseract 경로 설정 (Streamlit Cloud 환경이라면 무시해도 됨)
+# 경고 무시 (인증서 관련)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Tesseract 경로 (Streamlit Cloud 기준)
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
-# 사이드바에서 API 키 입력
+# ===== 사이드바 - API 키 입력 =====
 st.sidebar.title("🔐 API 키 입력")
 openai_key = st.sidebar.text_input("OpenAI API Key", type="password")
+drug_api_key = st.sidebar.text_input("공공데이터 API Key", type="password")
 
-# 제목
-st.title("💊 약사봇: 복용 주의 도우미")
-st.markdown("복용 중인 약 사진을 **여러 개 업로드**하면, GPT가 함께 먹어도 되는지 알려드려요.")
+# ===== 이미지 업로드 =====
+st.title("💊 약 성분 분석 및 병용 주의")
+uploaded_images = st.file_uploader("약 사진 여러 장을 업로드하세요", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
-# 이미지 업로드
-uploaded_files = st.file_uploader("약 사진을 업로드하세요 (여러 장 가능)", accept_multiple_files=True, type=["png", "jpg", "jpeg"])
+if uploaded_images and openai_key:
+    extracted_texts = []
 
-# 약 성분 추출 함수 (OCR)
-def extract_text_from_image(image):
-    img = Image.open(image)
-    text = pytesseract.image_to_string(img, lang='eng+kor')
-    return text.strip()
+    for uploaded_file in uploaded_images:
+        image = Image.open(uploaded_file)
+        st.image(image, caption="업로드한 이미지", use_container_width=True)
+        text = pytesseract.image_to_string(image, lang="eng+kor")
+        extracted_texts.append(text)
 
-# GPT 응답 생성
-def ask_gpt(prompt, api_key):
+    combined_text = "\n".join(extracted_texts)
+    st.subheader("📄 OCR로 추출한 텍스트")
+    st.text_area("추출된 성분 목록", combined_text, height=200)
+
+    # ===== GPT 호출 =====
+    openai.api_key = openai_key
+    gpt_prompt = f"""아래 성분들을 포함한 약을 동시에 복용할 경우의 주의사항이나 상호작용 가능성이 있다면 알려줘. 
+
     try:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "당신은 약학 전문가입니다."},
+                {"role": "user", "content": gpt_prompt}
+            ],
+            temperature=0.7
         )
-        return response.choices[0].message.content.strip()
+        result = response.choices[0].message.content
+        st.subheader("🤖 GPT 분석 결과")
+        st.write(result)
+
     except Exception as e:
-        return f"❗ GPT 호출 오류: {e}"
+        st.error(f"GPT 호출 중 오류 발생: {e}")
 
-# 처리
-if openai_key and uploaded_files:
-    st.info("🔍 약 성분을 분석 중입니다...")
-    all_texts = []
-    for file in uploaded_files:
-        text = extract_text_from_image(file)
-        all_texts.append(text)
+    # ===== 공공 API로 성분 설명 =====
+    def get_drug_info(item_name, api_key):
+        try:
+            encoded_name = urllib.parse.quote(item_name)
+            url = (
+                f"https://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList"
+                f"?serviceKey={api_key}&itemName={encoded_name}&type=json"
+            )
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
 
-    combined_text = "\n\n".join(all_texts)
-    st.subheader("📄 OCR 추출된 약 성분 정보")
-    st.text(combined_text)
+            if 'body' in data['response'] and 'items' in data['response']['body']:
+                item = data['response']['body']['items'][0]
+                return f"**효능**: {item.get('efcyQesitm', '정보 없음')}\n\n**복용법**: {item.get('useMethodQesitm', '정보 없음')}"
+            else:
+                return f"`{item_name}`에 대한 정보를 찾을 수 없습니다."
+        except Exception as e:
+            return f"❗ API 호출 오류: {e}"
 
-    # GPT 프롬프트
-    gpt_prompt = (
-        "아래 약 성분들을 기반으로, 이 약들을 함께 복용할 때 주의할 점이나 함께 복용하면 안 되는 경우를 알려줘.\n\n"
-        f"{combined_text}"
-    )
-
-    st.subheader("🤖 GPT 분석 결과")
-    result = ask_gpt(gpt_prompt, openai_key)
-    st.write(result)
+    st.subheader("📚 의약품 성분 설명 (공공 데이터)")
+    if drug_api_key:
+        for line in combined_text.splitlines():
+            line = line.strip()
+            if line and len(line) < 40:
+                with st.expander(f"🔎 {line}"):
+                    st.markdown(get_drug_info(line, drug_api_key))
+    else:
+        st.warning("📌 공공데이터 API 키가 입력되지 않았습니다.")
 else:
-    st.warning("📥 먼저 OpenAI API 키를 입력하고 약 사진을 업로드하세요.")
+    st.info("👈 API 키를 입력하고 이미지를 업로드하면 결과가 표시됩니다.")
+    
+
