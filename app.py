@@ -1,55 +1,61 @@
 import streamlit as st
+from PIL import Image
+import requests
+import openai
+import urllib.parse
+import json
 import os
 import io
-from PIL import Image
-from google.cloud import vision
-import openai
-import requests
-import urllib.parse
-import urllib3
 
-# SSL 인증서 경고 무시
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# ===== 인증 처리 (Google Cloud Vision) =====
+if "gcp_service_account" in st.secrets:
+    with open("gcp_key.json", "w") as f:
+        json.dump(st.secrets["gcp_service_account"], f)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
+else:
+    st.warning("Google Cloud Vision API 인증 정보가 설정되어 있지 않습니다.")
+
+from google.cloud import vision
+vision_client = vision.ImageAnnotatorClient()
 
 # ===== 사이드바 - API 키 입력 =====
 st.sidebar.title("🔐 API 키 입력")
-google_key_path = st.sidebar.text_input("Google Cloud Vision JSON 파일 경로", type="default")
 openai_key = st.sidebar.text_input("OpenAI API Key", type="password")
 drug_api_key = st.sidebar.text_input("공공데이터 API Key", type="password")
-
-# ===== OCR (Google Cloud Vision) 설정 =====
-if google_key_path:
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = google_key_path
-    vision_client = vision.ImageAnnotatorClient()
 
 # ===== 이미지 업로드 =====
 st.title("💊 약 성분 분석 및 병용 주의")
 uploaded_images = st.file_uploader("약 사진 여러 장을 업로드하세요", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
-if uploaded_images and google_key_path and openai_key:
+if uploaded_images and openai_key:
     extracted_texts = []
 
     for uploaded_file in uploaded_images:
-        image = uploaded_file.read()
-        vision_image = vision.Image(content=image)
-        response = vision_client.text_detection(image=vision_image)
+        image = Image.open(uploaded_file)
+        st.image(image, caption="업로드한 이미지", use_container_width=True)
+
+        # Vision API로 텍스트 추출
+        content = uploaded_file.read()
+        image_bytes = vision.Image(content=content)
+        response = vision_client.text_detection(image=image_bytes)
         texts = response.text_annotations
 
         if texts:
             text = texts[0].description
             extracted_texts.append(text)
-            st.image(Image.open(io.BytesIO(image)), caption="업로드한 이미지", use_container_width=True)
         else:
-            st.warning("텍스트를 인식하지 못했습니다.")
+            extracted_texts.append("(텍스트 인식 실패)")
 
     combined_text = "\n".join(extracted_texts)
-    st.subheader("📄 OCR로 추출한 텍스트")
+    st.subheader("📄 추출된 텍스트")
     st.text_area("추출된 성분 목록", combined_text, height=200)
 
     # ===== GPT 호출 =====
     openai.api_key = openai_key
-    gpt_prompt = f"""아래 성분들을 포함한 약을 동시에 복용할 경우의 주의사항이나 상호작용 가능성이 있다면 알려줘.\n\n{combined_text}"""
+    gpt_prompt = f"""아래 성분들을 포함한 약을 동시에 복용할 경우의 주의사항이나 상호작용 가능성이 있다면 알려줘.
 
+{combined_text}
+"""
     try:
         response = openai.chat.completions.create(
             model="gpt-4",
@@ -74,11 +80,11 @@ if uploaded_images and google_key_path and openai_key:
                 f"https://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList"
                 f"?serviceKey={api_key}&itemName={encoded_name}&type=json"
             )
-            response = requests.get(url, verify=False)
+            response = requests.get(url)
             response.raise_for_status()
             data = response.json()
 
-            if 'body' in data['response'] and 'items' in data['response']['body']:
+            if 'body' in data.get('response', {}) and 'items' in data['response']['body']:
                 item = data['response']['body']['items'][0]
                 return f"**효능**: {item.get('efcyQesitm', '정보 없음')}\n\n**복용법**: {item.get('useMethodQesitm', '정보 없음')}"
             else:
