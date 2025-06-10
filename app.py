@@ -1,56 +1,60 @@
 import streamlit as st
 from PIL import Image
 import pytesseract
-import openai
+from openai import OpenAI
 
-# Tesseract 경로 (Streamlit Cloud용)
+# Tesseract 경로 설정 (Streamlit Cloud 환경이라면 무시해도 됨)
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
-# --- 사이드바 ---
+# 사이드바에서 API 키 입력
 st.sidebar.title("🔐 API 키 입력")
 openai_key = st.sidebar.text_input("OpenAI API Key", type="password")
 
-# --- 제목 및 설명 ---
-st.title("💊 다약제 복용 주의점 안내")
-st.write("여러 약 사진을 업로드하면, 함께 복용 시 주의사항을 GPT가 알려드립니다.")
+# 제목
+st.title("💊 약사봇: 복용 주의 도우미")
+st.markdown("복용 중인 약 사진을 **여러 개 업로드**하면, GPT가 함께 먹어도 되는지 알려드려요.")
 
-# --- 파일 업로드 (여러 개 허용) ---
-uploaded_files = st.file_uploader("약 사진을 업로드하세요 (여러 개 가능)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+# 이미지 업로드
+uploaded_files = st.file_uploader("약 사진을 업로드하세요 (여러 장 가능)", accept_multiple_files=True, type=["png", "jpg", "jpeg"])
 
-if uploaded_files and openai_key:
-    openai.api_key = openai_key
-    extracted_names = []
+# 약 성분 추출 함수 (OCR)
+def extract_text_from_image(image):
+    img = Image.open(image)
+    text = pytesseract.image_to_string(img, lang='eng+kor')
+    return text.strip()
 
-    for i, uploaded_file in enumerate(uploaded_files):
-        image = Image.open(uploaded_file)
-        st.image(image, caption=f"업로드된 이미지 {i+1}", use_container_width=True)
-
-        # OCR 처리
-        text = pytesseract.image_to_string(image, lang="eng+kor")
-        st.text_area(f"OCR 결과 {i+1}", text, height=100)
-
-        # 약 이름 추출 (가장 유의미한 단어 1개 또는 첫 줄)
-        first_line = text.strip().split('\n')[0]
-        drug_name = first_line.split()[0] if first_line else f"약{i+1}"
-        extracted_names.append(drug_name)
-
-    # GPT 호출
-    if extracted_names:
-        joined_drugs = ", ".join(extracted_names)
-        st.subheader("🤖 GPT 복용 주의사항 안내")
-        prompt = (
-            f"다음 약들을 함께 복용하려고 합니다: {joined_drugs}. "
-            "이 약들을 함께 복용할 때 주의할 점이나 상호작용, 부작용 가능성이 있다면 알려주세요. "
-            "의학 전문가처럼 간단하고 정확하게 설명해 주세요."
+# GPT 응답 생성
+def ask_gpt(prompt, api_key):
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
         )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"❗ GPT 호출 오류: {e}"
 
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            st.write(response.choices[0].message.content)
-        except Exception as e:
-            st.error(f"GPT 호출 중 오류 발생:\n{e}")
+# 처리
+if openai_key and uploaded_files:
+    st.info("🔍 약 성분을 분석 중입니다...")
+    all_texts = []
+    for file in uploaded_files:
+        text = extract_text_from_image(file)
+        all_texts.append(text)
+
+    combined_text = "\n\n".join(all_texts)
+    st.subheader("📄 OCR 추출된 약 성분 정보")
+    st.text(combined_text)
+
+    # GPT 프롬프트
+    gpt_prompt = (
+        "아래 약 성분들을 기반으로, 이 약들을 함께 복용할 때 주의할 점이나 함께 복용하면 안 되는 경우를 알려줘.\n\n"
+        f"{combined_text}"
+    )
+
+    st.subheader("🤖 GPT 분석 결과")
+    result = ask_gpt(gpt_prompt, openai_key)
+    st.write(result)
 else:
-    st.info("📌 먼저 약 사진 여러 장을 업로드하고 OpenAI API 키를 입력하세요.")
+    st.warning("📥 먼저 OpenAI API 키를 입력하고 약 사진을 업로드하세요.")
