@@ -8,9 +8,10 @@ import os
 import io
 
 # ===== 인증 처리 (Google Cloud Vision) =====
-if "gcp_service_account" in st.secrets:
+if "google" in st.secrets and "credentials" in st.secrets["google"]:
+    credentials_info = json.loads(st.secrets["google"]["credentials"])
     with open("gcp_key.json", "w") as f:
-        json.dump(st.secrets["gcp_service_account"], f)
+        json.dump(credentials_info, f)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
 else:
     st.warning("Google Cloud Vision API 인증 정보가 설정되어 있지 않습니다.")
