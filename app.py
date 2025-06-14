@@ -8,16 +8,17 @@ import os
 import io
 
 # ===== 인증 처리 (Google Cloud Vision) =====
-if "google" in st.secrets and "credentials" in st.secrets["google"]:
-    credentials_info = json.loads(st.secrets["google"]["credentials"])
-    with open("gcp_key.json", "w") as f:
-        json.dump(credentials_info, f)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
+from google.cloud import vision
+from google.oauth2 import service_account
+
+if "google_cloud" in st.secrets:
+    google_creds = dict(st.secrets["google_cloud"])
+    google_creds["private_key"] = google_creds["private_key"].replace("\\\\n", "\n")
+    credentials = service_account.Credentials.from_service_account_info(google_creds)
+    vision_client = vision.ImageAnnotatorClient(credentials=credentials)
 else:
     st.warning("Google Cloud Vision API 인증 정보가 설정되어 있지 않습니다.")
-
-from google.cloud import vision
-vision_client = vision.ImageAnnotatorClient()
+    vision_client = None  # 오류 방지용
 
 # ===== 사이드바 - API 키 입력 =====
 st.sidebar.title("🔐 API 키 입력")
@@ -28,7 +29,7 @@ drug_api_key = st.sidebar.text_input("공공데이터 API Key", type="password")
 st.title("💊 약 성분 분석 및 병용 주의")
 uploaded_images = st.file_uploader("약 사진 여러 장을 업로드하세요", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
-if uploaded_images and openai_key:
+if uploaded_images and openai_key and vision_client:
     extracted_texts = []
 
     for uploaded_file in uploaded_images:
